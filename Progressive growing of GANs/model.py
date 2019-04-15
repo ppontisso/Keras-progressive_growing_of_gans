@@ -20,13 +20,13 @@ def GD(incoming,
     return GDropLayer(name='gd', mode='prop', strength=gdrop_strength)(incoming) if use_gdrop else incoming
 
 
-def NINBlock(net,
-             num_channels,
-             actv,
-             init,
-             use_wscale,
-             name=None):
-
+def NINBlock(
+        net,
+        num_channels,
+        actv,
+        init,
+        use_wscale=True,
+        name=None):
     if use_wscale:
 
         NINlayer = Conv2D(num_channels, 1, padding='same',
@@ -145,30 +145,6 @@ def G_convblock(
         net = Pixnorm(net)
     return net
 
-
-def NINblock(
-    net,
-    num_channels,
-    actv,
-    init,
-    use_wscale=True,
-    name=None):
-    if use_wscale:
-
-        NINlayer = Conv2D(num_channels, 1, padding='same',
-                      activation=None,use_bias = False, kernel_initializer=init, name=name + 'NIN')
-        net = NINlayer(net)
-        Wslayer = WScaleLayer(NINlayer, name=name + 'NINWS')
-        net = Wslayer(net)
-        net = AddBiasLayer()(net)
-        net = Activation(actv)(net)
-    else:
-        NINlayer = Conv2D(num_channels, 1, padding='same',
-                      activation=actv,kernel_initializer=init, name=name + 'NIN')
-        net = NINlayer(net)
-    return net
-
-
 def Generator(
     num_channels        =1,
     resolution          =32,
@@ -188,15 +164,15 @@ def Generator(
     assert resolution == 2 ** R and resolution >= 4
     cur_lod = K.variable(np.float32(0.0), dtype='float32', name='cur_lod')
 
-    def numf(stage): return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
+    def numf(stage):
+        return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
+
     if latent_size is None:
         latent_size = numf(0)
     (act, act_init) = (lrelu, lrelu_init) if use_leakyrelu else (relu, relu_init)
 
     inputs = [Input(shape=[latent_size], name='Glatents')]
     net = inputs[-1]
-
-    #print("DEEEEEEEE")
 
     if normalize_latents:
         net = PixelNormLayer(name='Gnorm')(net)
@@ -218,7 +194,7 @@ def Generator(
                           use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G%db' % I)
         lods += [net]
 
-    lods = [NINblock(l, num_channels, linear, linear_init, use_wscale=use_wscale,
+    lods = [NINBlock(l, num_channels, linear, linear_init, use_wscale=use_wscale,
                      name='Glod%d' % i) for i, l in enumerate(reversed(lods))]
     output = LODSelectLayer(cur_lod, name='Glod')(lods)
     if tanh_at_end is not None:

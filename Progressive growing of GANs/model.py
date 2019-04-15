@@ -14,6 +14,96 @@ linear, linear_init = activations.linear,       initializers.he_normal()
 relu,   relu_init = activations.relu,         initializers.he_normal()
 lrelu,  lrelu_init = lambda x: K.relu(x, 0.2),  initializers.he_normal()
 
+def GD(incoming,
+       use_gdrop,
+       gdrop_strength):
+    return GDropLayer(name='gd', mode='prop', strength=gdrop_strength)(incoming) if use_gdrop else incoming
+
+
+def NINBlock(net,
+             num_channels,
+             actv,
+             init,
+             use_wscale,
+             name=None):
+
+    if use_wscale:
+
+        NINlayer = Conv2D(num_channels, 1, padding='same',
+                          activation=None, use_bias=False, kernel_initializer=init, name=name + 'NIN')
+        net = NINlayer(net)
+        Wslayer = WScaleLayer(NINlayer, name=name + 'NINWS')
+        net = Wslayer(net)
+        net = AddBiasLayer()(net)
+        net = Activation(actv)(net)
+    else:
+        NINlayer = Conv2D(num_channels, 1, padding='same',
+                          activation=actv, kernel_initializer=init, name=name + 'NIN')
+        net = NINlayer(net)
+    return net
+
+
+def Downscale2DLayer(incoming, scale_factor, **kwargs):
+    return AveragePooling2D(pool_size=scale_factor, **kwargs)(incoming)
+
+
+def D_ConvBlock(net,
+                num_filter,
+                filter_size,
+                actv,
+                init,
+                pad,
+                use_wscale,
+                use_layernorm,
+                epsilon, use_gdrop,
+                gdrop_strength,
+
+                name=None):
+
+    net = GD(net, use_gdrop, gdrop_strength,)
+
+    if pad == 'full':
+        pad = filter_size - 1
+    Pad = ZeroPadding2D(pad, name=name + 'Pad')
+    net = Pad(net)
+    if use_wscale:
+        Conv = Conv2D(num_filter, filter_size, padding='valid',
+                      activation=None, kernel_initializer=init, use_bias=False, name=name)
+    else:
+        Conv = Conv2D(num_filter, filter_size, padding='valid',
+                      activation=actv, kernel_initializer=init, name=name)
+    net = Conv(net)
+    if use_wscale:
+        layer = WScaleLayer(Conv, name=name + 'ws')
+        net = layer(net)
+        Addbias = AddBiasLayer()
+        net = Addbias(net)
+        net = Activation(actv)(net)
+    if use_layernorm:
+        layer = LayerNormLayer(layer, epsilon, name=name + 'ln')
+        net = layer(net)
+    return net
+
+def DenseBlock(
+    net,
+    size,
+    act,
+    init,
+    use_wscale,
+    name=None):
+
+    if use_wscale:
+        layer = Dense(size, activation=None,use_bias = False, kernel_initializer=init,name=name)
+        net = layer(net)
+        layer = WScaleLayer(layer, name=name+'ws')
+        net = layer(net)
+        Addbias = AddBiasLayer()
+        net = Addbias(net)
+        net = Activation(act)(net)
+    else:
+        layer = Dense(size, activation=act, kernel_initializer=init,name=name)
+        net = layer(net)
+    return net
 
 def vlrelu(x): return K.relu(x, 0.3)
 
@@ -28,7 +118,8 @@ def G_convblock(
     use_wscale=True,
     use_pixelnorm=True,
     use_batchnorm=False,
-    name=None):
+    name=None,):
+
     if pad == 'full':
         pad = filter_size - 1
     Pad = ZeroPadding2D(pad, name=name + 'Pad')
@@ -155,82 +246,25 @@ def Discriminator(
     use_layernorm=False,
     **kwargs):
 
+    def numf(stage):
+        return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
+
     epsilon = 0.01
     R = int(np.log2(resolution))
     assert resolution == 2 ** R and resolution >= 4
     cur_lod = K.variable(np.float(0.0), dtype='float32', name='cur_lod')
     gdrop_strength = K.variable(np.float(0.0), dtype='float32', name='gdrop_strength')
 
-    def numf(stage): return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
-
-    def GD(incoming):
-        return GDropLayer(name='gd', mode='prop', strength=gdrop_strength)(incoming) if use_gdrop else incoming
-
-    def WS(layer):
-        return WScaleLayer(layer, name=layer.name + 'ws') if use_wscale else layer
-
-    def NINBlock(net,
-            num_channels,
-            actv,
-            init,
-            name=None):
-        if use_wscale:
-
-            NINlayer = Conv2D(num_channels, 1, padding='same',
-                          activation=None,use_bias = False, kernel_initializer=init, name=name + 'NIN')
-            net = NINlayer(net)
-            Wslayer = WScaleLayer(NINlayer, name=name + 'NINWS')
-            net = Wslayer(net)
-            net = AddBiasLayer()(net)
-            net = Activation(actv)(net)
-        else:
-            NINlayer = Conv2D(num_channels, 1, padding='same',
-                          activation=actv,kernel_initializer=init, name=name + 'NIN')
-            net = NINlayer(net)
-        return net
-
-    def Downscale2DLayer(incoming, scale_factor, **kwargs):
-        return AveragePooling2D(pool_size=scale_factor, **kwargs)(incoming)
-
-    def ConvBlock(net,
-            num_filter,
-            filter_size,
-            actv,
-            init,
-            pad,
-            name=None):
-        net = GD(net)
-        if pad == 'full':
-            pad = filter_size - 1
-        Pad = ZeroPadding2D(pad, name=name + 'Pad')
-        net = Pad(net)
-        if use_wscale:
-            Conv = Conv2D(num_filter, filter_size, padding='valid',
-                      activation=None, kernel_initializer=init,use_bias = False, name=name)
-        else:
-            Conv = Conv2D(num_filter, filter_size, padding='valid',
-                      activation=actv, kernel_initializer=init, name=name)
-        net = Conv(net)
-        if use_wscale:
-            layer = WScaleLayer(Conv, name=name + 'ws')
-            net = layer(net)
-            Addbias = AddBiasLayer()
-            net = Addbias(net)
-            net = Activation(actv)(net)
-        if use_layernorm:
-            layer = LayerNormLayer(layer, epsilon, name=name+'ln')
-            net = layer(net)
-        return net
-
     inputs = Input(shape=[2**R, 2**R,num_channels], name='Dimages')
-    net = NINBlock(inputs, numf(R-1), lrelu, lrelu_init, name='D%dx' % (R-1))
+    net = NINBlock(inputs, numf(R-1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R-1))
     for i in range(R-1, 1, -1):
-        net = ConvBlock(net, numf(i), 3, lrelu, lrelu_init, 1, name='D%db' % i)
-        net = ConvBlock(net, numf(i - 1), 3, lrelu,
-                        lrelu_init, 1, name='D%da' % i)
+        net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                          epsilon, use_gdrop, gdrop_strength, name='D%db' % i)
+        net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                          epsilon, use_gdrop, gdrop_strength, name='D%da' % i)
         net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
         lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
-        lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, name='D%dx' % (i - 1))
+        lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='D%dx' % (i - 1))
         net = LODSelectLayer(cur_lod, name='D%dlod' % (i - 1), first_incoming_lod=R - i - 1)([net, lod])
 
     if mbstat_avg is not None:
@@ -239,35 +273,17 @@ def Discriminator(
     if mbdisc_kernels:
         net = MinibatchLayer(mbdisc_kernels,name='Dmd')(net)
 
-    net = ConvBlock(net, numf(1), 3, lrelu, lrelu_init, 1, name='D1b')
-    net = ConvBlock(net, numf(0), 4, lrelu, lrelu_init, 0, name='D1a')
+    net = D_ConvBlock(net, numf(1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                      epsilon, use_gdrop, gdrop_strength, name='D1b')
+    net = D_ConvBlock(net, numf(0), 4, lrelu, lrelu_init, 0, use_wscale, use_layernorm,
+                      epsilon, use_gdrop, gdrop_strength, name='D1a')
 
-    def DenseBlock(
-        net,
-        size,
-        act,
-        init,
-        name=None):
-        #layer = Dense(size, activation=act, kernel_initializer=init,name=name)
-        #net = layer(net)
-        if use_wscale:
-            layer = Dense(size, activation=None,use_bias = False, kernel_initializer=init,name=name)
-            net = layer(net)
-            layer = WScaleLayer(layer, name=name+'ws')
-            net = layer(net)
-            Addbias = AddBiasLayer()
-            net = Addbias(net)
-            net = Activation(act)(net)
-        else:
-            layer = Dense(size, activation=act, kernel_initializer=init,name=name)
-            net = layer(net)
-        return net
 
-    net = DenseBlock(net,1,linear,linear_init,name='Dscores')
+    net = DenseBlock(net,1,linear,linear_init, use_wscale, name='Dscores')
     output_layers = [net]
     if label_size:
         output_layers += [DenseBlock(net,label_size, act=linear,
-                                   init=linear_init, name='Dlabels')]
+                                   init=linear_init, use_wscale = use_wscale, name='Dlabels')]
 
     model = Model(inputs=[inputs], outputs=output_layers)
     model.cur_lod = cur_lod
@@ -284,16 +300,6 @@ def PG_GAN(G,D,latent_size,label_size,resolution,num_channels):
     print("Label size:")
     print(label_size)
 
-    #inputs = [Input(shape=[latent_size], name='GANlatents')]
-    #if label_size:
-    #    inputs += [Input(shape=[label_size], name='GANlabels')]
-
-
-    #fake = G(inputs)
-    #GAN_out = D(fake)
-
-
-    #G_train = Model(inputs = inputs,outputs = [GAN_out],name = "PG_GAN")
     G_train = Sequential([G, D])
     G_train.cur_lod = G.cur_lod
     
@@ -306,6 +312,9 @@ def PG_GAN(G,D,latent_size,label_size,resolution,num_channels):
     D_train.cur_lod = D.cur_lod
 
     return G_train,D_train
+
+def twin_gan():
+    pass
 
 
 if __name__ == '__main__':

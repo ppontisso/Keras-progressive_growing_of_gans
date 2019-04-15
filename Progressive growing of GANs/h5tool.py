@@ -199,7 +199,10 @@ def create_celeba_channel_last(h5_filename, celeba_dir, cx=89, cy=121):
     print((len(image_filenames)))
     test = []
     for i in image_filenames:
-        a=i.split('/')[-1]
+        # for windows user :
+        a=i.split('\\')[-1]
+        # for linux user
+        # a=i.split('\\')[-1]
         a=a.split('.')[0]
         test.append(int(a))
     for i in range(1,len(test)):
@@ -210,7 +213,7 @@ def create_celeba_channel_last(h5_filename, celeba_dir, cx=89, cy=121):
         print('Error: Expected to find %d images in %s' % (num_images, glob_pattern))
         return
     
-    h5 = HDF5Exporter(h5_filename, 128, 3)
+    h5 = HDF5Exporter(h5_filename, 32, 3)
     for idx in range(num_images):
         print('%d / %d\r' % (idx, num_images), end=' ')
         img = np.asarray(PIL.Image.open(image_filenames[idx]))

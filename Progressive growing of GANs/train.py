@@ -207,7 +207,7 @@ def train_gan(
     D.trainable = True
     D_train.compile(D_opt,loss=D_loss,loss_weights=D_loss_weight)
 
-
+    print(D_train.summary())
     cur_nimg = int(resume_kimg * 1000)
     cur_tick = 0
     tick_start_nimg = cur_nimg

@@ -57,7 +57,7 @@ def D_ConvBlock(net,
                 use_layernorm,
                 epsilon, use_gdrop,
                 gdrop_strength,
-
+                use_batchnorm = True,
                 name=None):
 
     net = GD(net, use_gdrop, gdrop_strength,)
@@ -79,6 +79,9 @@ def D_ConvBlock(net,
         Addbias = AddBiasLayer()
         net = Addbias(net)
         net = Activation(actv)(net)
+    if use_batchnorm:
+        Bslayer = BatchNormalization(name=name + 'BN')
+        net = Bslayer(net)
     if use_layernorm:
         layer = LayerNormLayer(layer, epsilon, name=name + 'ln')
         net = layer(net)
@@ -117,7 +120,7 @@ def G_convblock(
     pad='same',
     use_wscale=True,
     use_pixelnorm=True,
-    use_batchnorm=False,
+    use_batchnorm=True,
     name=None,):
 
     if pad == 'full':
@@ -157,7 +160,7 @@ def Generator(
     use_wscale          =True,
     use_pixelnorm       =True,
     use_leakyrelu       =True,
-    use_batchnorm       =False,
+    use_batchnorm       =True,
     tanh_at_end         =None,
     **kwargs):
     R = int(np.log2(resolution))
@@ -176,10 +179,11 @@ def Generator(
 
     if normalize_latents:
         net = PixelNormLayer(name='Gnorm')(net)
+
     if label_size:
         inputs += [Input(shape=[label_size], name='Glabels')]
         net = Concatenate(name='G1na')([net, inputs[-1]])
-    net = Reshape((1, 1,K.int_shape(net)[1]), name='G1nb')(net)
+    net = Reshape((1, 1, K.int_shape(net)[1]), name='G1nb')(net)
 
     net = G_convblock(net, numf(1), 4, act, act_init, pad='full', use_wscale=use_wscale,
                       use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G1a')
@@ -220,6 +224,7 @@ def Discriminator(
     use_wscale=True,
     use_gdrop=True,
     use_layernorm=False,
+    use_batchnorm=True,
     **kwargs):
 
     def numf(stage):
@@ -235,9 +240,9 @@ def Discriminator(
     net = NINBlock(inputs, numf(R-1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R-1))
     for i in range(R-1, 1, -1):
         net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                          epsilon, use_gdrop, gdrop_strength, name='D%db' % i)
+                          epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D%db' % i)
         net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                          epsilon, use_gdrop, gdrop_strength, name='D%da' % i)
+                          epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D%da' % i)
         net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
         lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
         lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='D%dx' % (i - 1))
@@ -250,9 +255,9 @@ def Discriminator(
         net = MinibatchLayer(mbdisc_kernels,name='Dmd')(net)
 
     net = D_ConvBlock(net, numf(1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                      epsilon, use_gdrop, gdrop_strength, name='D1b')
+                      epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D1b')
     net = D_ConvBlock(net, numf(0), 4, lrelu, lrelu_init, 0, use_wscale, use_layernorm,
-                      epsilon, use_gdrop, gdrop_strength, name='D1a')
+                      epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D1a')
 
 
     net = DenseBlock(net,1,linear,linear_init, use_wscale, name='Dscores')
@@ -272,7 +277,6 @@ def PG_GAN(G,D,latent_size,label_size,resolution,num_channels):
     print("Latent size:")
     print(latent_size)
 
-
     print("Label size:")
     print(label_size)
 
@@ -289,14 +293,16 @@ def PG_GAN(G,D,latent_size,label_size,resolution,num_channels):
 
     return G_train,D_train
 
-def twin_gan():
+def twin_gan(G,D):
+
+
     pass
 
 
 if __name__ == '__main__':
     model = Generator(
         num_channels            = 3,         # Overridden based on dataset.
-        resolution              = 1024,      # Overridden based on dataset.
+        resolution              = 64,      # Overridden based on dataset.
         label_size              = 0,         # Overridden based on dataset.
         fmap_base               = 8192,     # Overall multiplier for the number of feature maps.
         fmap_decay              = 1.0,      # log2 of feature map reduction when doubling the resolution.
@@ -314,7 +320,7 @@ if __name__ == '__main__':
 
     model = Discriminator(
         num_channels            = 3,             # Overridden based on dataset.
-        resolution              = 1024,          # Overridden based on dataset.
+        resolution              = 64,          # Overridden based on dataset.
         label_size              = 0,             # Overridden based on dataset.
         fmap_base               = 8192,         # Overall multiplier for the number of feature maps.
         fmap_decay              = 1.0,          # log2 of feature map reduction when doubling the resolution.

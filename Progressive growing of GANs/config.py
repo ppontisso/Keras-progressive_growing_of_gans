@@ -35,7 +35,7 @@ G = dict(                                   # Generator architecture:
     use_wscale              = True,         # Use equalized learning rate?
     use_pixelnorm           = True,         # Use pixelwise normalization?
     use_leakyrelu           = True,         # Use leaky ReLU?
-    use_batchnorm           = False,        # Use batch normalization?
+    use_batchnorm           = True,        # Use batch normalization?
     tanh_at_end             = None,         # Use tanh activation for the last layer? If so, how much to scale the output?
 )
 
@@ -50,6 +50,7 @@ D = dict(                                   # Discriminator architecture:
     use_wscale              = True,         # Use equalized learning rate?
     use_gdrop               = False,        # Include layers to inject multiplicative Gaussian noise?
     use_layernorm           = False,        # Use layer normalization?
+    use_batchnorm=True,                     # Use batch normalization?
 )
 
 loss = dict(                                # Loss function:

@@ -14,11 +14,6 @@ linear, linear_init = activations.linear,       initializers.he_normal()
 relu,   relu_init = activations.relu,         initializers.he_normal()
 lrelu,  lrelu_init = lambda x: K.relu(x, 0.2),  initializers.he_normal()
 
-def GD(incoming,
-       use_gdrop,
-       gdrop_strength):
-    return GDropLayer(name='gd', mode='prop', strength=gdrop_strength)(incoming) if use_gdrop else incoming
-
 
 def NINBlock(
         net,
@@ -55,12 +50,9 @@ def D_ConvBlock(net,
                 pad,
                 use_wscale,
                 use_layernorm,
-                epsilon, use_gdrop,
-                gdrop_strength,
+                epsilon,
                 use_batchnorm = True,
                 name=None):
-
-    net = GD(net, use_gdrop, gdrop_strength,)
 
     if pad == 'full':
         pad = filter_size - 1
@@ -148,10 +140,52 @@ def G_convblock(
         net = Pixnorm(net)
     return net
 
+def Encoder(
+    num_channels        =1,
+    resolution          =32,
+    fmap_base           =4096,
+    fmap_decay          =1.0,
+    fmap_max            =256,
+    use_wscale          =True,
+    use_batchnorm       =True,
+    use_layernorm = False,
+    **kwargs):
+
+    def numf(stage):
+        return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
+
+    epsilon = 0.01
+    R = int(np.log2(resolution))
+    assert resolution == 2 ** R and resolution >= 4
+    cur_lod = K.variable(np.float(0.0), dtype='float32', name='cur_lod')
+
+    inputs = Input(shape=[2**R, 2**R,num_channels], name='Dimages')
+    net = NINBlock(inputs, numf(R-1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R-1))
+    for i in range(R-1, 2, -1):
+        net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                          epsilon, use_batchnorm=use_batchnorm, name='D%db' % i)
+        net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                          epsilon, use_batchnorm=use_batchnorm, name='D%da' % i)
+        net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
+        lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
+        lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='D%dx' % (i - 1))
+        net = LODSelectLayer(cur_lod, name='D%dlod' % (i - 1), first_incoming_lod=R - i - 1)([net, lod])
+
+    net = D_ConvBlock(net, numf(1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
+                      epsilon, use_batchnorm=use_batchnorm, name='D1b')
+    net = D_ConvBlock(net, numf(0), 4, lrelu, lrelu_init, 0, use_wscale, use_layernorm,
+                      epsilon, use_batchnorm=use_batchnorm, name='D1a')
+
+    output_layers = [net]
+
+    model = Model(inputs=[inputs], outputs=output_layers)
+    model.cur_lod = cur_lod
+    return model
+
+
 def Generator(
     num_channels        =1,
     resolution          =32,
-    label_size          =0,
     fmap_base           =4096,
     fmap_decay          =1.0,
     fmap_max            =256,
@@ -180,9 +214,6 @@ def Generator(
     if normalize_latents:
         net = PixelNormLayer(name='Gnorm')(net)
 
-    if label_size:
-        inputs += [Input(shape=[label_size], name='Glabels')]
-        net = Concatenate(name='G1na')([net, inputs[-1]])
     net = Reshape((1, 1, K.int_shape(net)[1]), name='G1nb')(net)
 
     net = G_convblock(net, numf(1), 4, act, act_init, pad='full', use_wscale=use_wscale,
@@ -214,15 +245,11 @@ def Generator(
 def Discriminator(
     num_channels=1,        # Overridden based on dataset.
     resolution=32,       # Overridden based on dataset.
-    label_size=0,        # Overridden based on dataset.
     fmap_base=4096,
     fmap_decay=1.0,
     fmap_max=256,
-    mbstat_func='Tstdeps',
     mbstat_avg='all',
-    mbdisc_kernels=None,
     use_wscale=True,
-    use_gdrop=True,
     use_layernorm=False,
     use_batchnorm=True,
     **kwargs):
@@ -234,15 +261,14 @@ def Discriminator(
     R = int(np.log2(resolution))
     assert resolution == 2 ** R and resolution >= 4
     cur_lod = K.variable(np.float(0.0), dtype='float32', name='cur_lod')
-    gdrop_strength = K.variable(np.float(0.0), dtype='float32', name='gdrop_strength')
 
     inputs = Input(shape=[2**R, 2**R,num_channels], name='Dimages')
     net = NINBlock(inputs, numf(R-1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R-1))
     for i in range(R-1, 1, -1):
         net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                          epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D%db' % i)
+                          epsilon, use_batchnorm=use_batchnorm, name='D%db' % i)
         net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                          epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D%da' % i)
+                          epsilon, use_batchnorm=use_batchnorm, name='D%da' % i)
         net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
         lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
         lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='D%dx' % (i - 1))
@@ -251,29 +277,23 @@ def Discriminator(
     if mbstat_avg is not None:
         net = MinibatchStatConcatLayer(averaging=mbstat_avg, name='Dstat')(net)
 
-    if mbdisc_kernels:
-        net = MinibatchLayer(mbdisc_kernels,name='Dmd')(net)
-
     net = D_ConvBlock(net, numf(1), 3, lrelu, lrelu_init, 1, use_wscale, use_layernorm,
-                      epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D1b')
+                      epsilon, use_batchnorm=use_batchnorm, name='D1b')
     net = D_ConvBlock(net, numf(0), 4, lrelu, lrelu_init, 0, use_wscale, use_layernorm,
-                      epsilon, use_gdrop, gdrop_strength, use_batchnorm=use_batchnorm, name='D1a')
+                      epsilon, use_batchnorm=use_batchnorm, name='D1a')
 
 
     net = DenseBlock(net,1,linear,linear_init, use_wscale, name='Dscores')
     output_layers = [net]
-    if label_size:
-        output_layers += [DenseBlock(net,label_size, act=linear,
-                                   init=linear_init, use_wscale = use_wscale, name='Dlabels')]
 
     model = Model(inputs=[inputs], outputs=output_layers)
     model.cur_lod = cur_lod
-    model.gdrop_strength=gdrop_strength
     return model
 
 def replace_batch_norm(model):
     # source : https://stackoverflow.com/questions/49492255/how-to-replace-or-insert-intermediate-layer-in-keras-model
     # replace all the batch normalization layers in the model with new ones and return the twin model
+    # batch norm layers must have 'BN' in their names
 
     # Auxiliary dictionary to describe the network graph
     network_dict = {'input_layers_of': {}, 'new_output_tensor_of': {}}
@@ -354,7 +374,6 @@ if __name__ == '__main__':
     model = Generator(
         num_channels            = 3,         # Overridden based on dataset.
         resolution              = 64,      # Overridden based on dataset.
-        label_size              = 0,         # Overridden based on dataset.
         fmap_base               = 8192,     # Overall multiplier for the number of feature maps.
         fmap_decay              = 1.0,      # log2 of feature map reduction when doubling the resolution.
         fmap_max                = 512,      # Maximum number of feature maps on any resolution.
@@ -372,16 +391,12 @@ if __name__ == '__main__':
     model = Discriminator(
         num_channels            = 3,             # Overridden based on dataset.
         resolution              = 64,          # Overridden based on dataset.
-        label_size              = 0,             # Overridden based on dataset.
         fmap_base               = 8192,         # Overall multiplier for the number of feature maps.
         fmap_decay              = 1.0,          # log2 of feature map reduction when doubling the resolution.
         fmap_max                = 512,          # Maximum number of feature maps on any resolution.
-        mbstat_func             = 'Tstdeps',    # Which minibatch statistic to append as an additional feature map?
         mbstat_avg              = 'all',        # Which dimensions to average the statistic over?
-        mbdisc_kernels          = None,         # Use minibatch discrimination layer? If so, how many kernels should it have?
         use_wscale              = True,         # Use equalized learning rate?
-        use_gdrop               = False,        # Include layers to inject multiplicative Gaussian noise?
-        use_layernorm           = False,        # Use layer normalization? 
+        use_layernorm           = False,        # Use layer normalization?
     )
     print(model.summary())
     print(model.cur_lod)

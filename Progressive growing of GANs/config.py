@@ -44,12 +44,11 @@ D = dict(                                   # Discriminator architecture:
     fmap_base               = 8192,         # Overall multiplier for the number of feature maps.
     fmap_decay              = 1.0,          # log2 of feature map reduction when doubling the resolution.
     fmap_max                = 512,          # Maximum number of feature maps on any resolution.
-    mbstat_func             = 'Tstdeps',    # Which minibatch statistic to append as an additional feature map?
     mbstat_avg              = 'all',        # Which dimensions to average the statistic over?
-    mbdisc_kernels          = None,         # Use minibatch discrimination layer? If so, how many kernels should it have?
     use_wscale              = True,         # Use equalized learning rate?
-    use_gdrop               = False,        # Include layers to inject multiplicative Gaussian noise?
-    use_layernorm           = False,        # Use layer normalization?
+
+    use_layernorm           = False,         # Use layer normalization? => Will need to set to True later !!!!!!!!!
+
     use_batchnorm=True,                     # Use batch normalization?
 )
 

@@ -175,7 +175,7 @@ def train_gan(
         G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
         D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
         
-    G_train,D_train = PG_GAN(G,D,config.G['latent_size'],0,training_set.shape[1],training_set.shape[3]) 
+    G_train,D_train = PG_GAN(G,D,0,training_set.shape[1],training_set.shape[3])
  
     print(G.summary())
     print(D.summary())

@@ -58,6 +58,7 @@ class LODSelectLayer(Layer):
 
     def call(self, inputs):
         self.input_shapes = [K.int_shape(input) for input in inputs]
+
         v = [ACTVResizeLayer(K.int_shape(input), self.input_shapes[self.ref_idx])(input) for input in inputs]
         lo = np.clip(int(np.floor(self.min_lod - self.first_incoming_lod)), 0, len(v)-1) if self.min_lod is not None else 0
         hi = np.clip(int(np.ceil(self.max_lod - self.first_incoming_lod)), lo, len(v)-1) if self.max_lod is not None else len(v)-1

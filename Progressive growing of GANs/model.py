@@ -38,8 +38,8 @@ def NINBlock(
     return net
 
 
-def Downscale2DLayer(incoming, scale_factor, **kwargs):
-    return AveragePooling2D(pool_size=scale_factor, **kwargs)(incoming)
+def Downscale2DLayer(incoming, scale_factor, name, **kwargs):
+    return AveragePooling2D(pool_size=scale_factor, name=name, **kwargs)(incoming)
 
 
 def D_ConvBlock(net,
@@ -132,16 +132,22 @@ def G_convblock(
     return net
 
 
-def Encoder(
+def Generator_Encoder(
         num_channels=1,
         resolution=32,
         fmap_base=4096,
         fmap_decay=1.0,
         fmap_max=256,
         use_wscale=True,
+        use_pixelnorm=True,
+        use_leakyrelu=True,
         use_batchnorm=True,
+        tanh_at_end=None,
         use_layernorm=False,
         **kwargs):
+
+    #ENCODER
+
     def numf(stage):
         return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
 
@@ -152,11 +158,17 @@ def Encoder(
 
     inputs = Input(shape=[2 ** R, 2 ** R, num_channels], name='Dimages')
     net = NINBlock(inputs, numf(R - 1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R - 1))
+
+    concat_layers = []
+
     for i in range(R - 1, 1, -1):
         net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, use_wscale, use_layernorm,
                           epsilon, use_batchnorm=use_batchnorm, name='D%db' % i)
         net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, use_wscale, use_layernorm,
                           epsilon, use_batchnorm=use_batchnorm, name='D%da' % i)
+
+        concat_layers.append(net)
+
         net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
 
         lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
@@ -170,42 +182,27 @@ def Encoder(
 
     output_layers = [net]
 
-    model = Model(inputs=[inputs], outputs=output_layers)
-    model.cur_lod = cur_lod
-    return model
+    encoder = Model(inputs=[inputs], outputs=output_layers)
+    encoder.cur_lod = cur_lod
 
-
-def Generator(
-        num_channels=1,
-        resolution=32,
-        fmap_base=4096,
-        fmap_decay=1.0,
-        fmap_max=256,
-        use_wscale=True,
-        use_pixelnorm=True,
-        use_leakyrelu=True,
-        use_batchnorm=True,
-        tanh_at_end=None,
-        **kwargs):
-    R = int(np.log2(resolution))
-    assert resolution == 2 ** R and resolution >= 4
-    cur_lod = K.variable(np.float32(0.0), dtype='float32', name='cur_lod')
-
-    def numf(stage):
-        return min(int(fmap_base / (2.0 ** (stage * fmap_decay))), fmap_max)
+    # GENERATOR
 
     (act, act_init) = (lrelu, lrelu_init) if use_leakyrelu else (relu, relu_init)
 
     inputs = [Input(shape=(4, 4, 256), name='Glatents')]
     net = inputs[-1]
 
-    net = G_convblock(net, numf(1), 4, act, act_init, use_wscale=use_wscale,
-                      use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G1a')
     net = G_convblock(net, numf(1), 3, act, act_init, use_wscale=use_wscale,
-                      use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G1b')
+                      use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G1a')
+
     lods = [net]
     for I in range(2, R):
         net = UpSampling2D(2, name='G%dup' % I)(net)
+        # concat U-Net
+        encoder_layer = concat_layers[-I+1]
+        print(net, encoder_layer)
+
+        net = concatenate(inputs = [net, encoder_layer], axis=0)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
                           use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G%da' % I)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
@@ -220,9 +217,9 @@ def Generator(
         if tanh_at_end != 1.0:
             output = Lambda(lambda x: x * tanh_at_end, name='Gtanhs')
 
-    model = Model(inputs=inputs, outputs=[output])
-    model.cur_lod = cur_lod
-    return model
+    generator = Model(inputs=inputs, outputs=[output])
+    generator.cur_lod = cur_lod
+    return generator, encoder
 
 
 def Discriminator(

@@ -156,41 +156,33 @@ def Generator_Encoder(
     assert resolution == 2 ** R and resolution >= 4
     cur_lod = K.variable(np.float(0.0), dtype='float32', name='cur_lod')
 
-    inputs = Input(shape=[2 ** R, 2 ** R, num_channels], name='Dimages')
-    net = NINBlock(inputs, numf(R - 1), lrelu, lrelu_init, use_wscale, name='D%dx' % (R - 1))
+    input = Input(shape=[2 ** R, 2 ** R, num_channels], name='Eimages')
+    net = NINBlock(input, numf(R - 1), lrelu, lrelu_init, use_wscale, name='E%dx' % (R - 1))
 
     concat_layers = []
 
     for i in range(R - 1, 1, -1):
         net = D_ConvBlock(net, numf(i), 3, lrelu, lrelu_init, use_wscale, use_layernorm,
-                          epsilon, use_batchnorm=use_batchnorm, name='D%db' % i)
+                          epsilon, use_batchnorm=use_batchnorm, name='E%db' % i)
         net = D_ConvBlock(net, numf(i - 1), 3, lrelu, lrelu_init, use_wscale, use_layernorm,
-                          epsilon, use_batchnorm=use_batchnorm, name='D%da' % i)
+                          epsilon, use_batchnorm=use_batchnorm, name='E%da' % i)
 
         concat_layers.append(net)
 
-        net = Downscale2DLayer(net, name='D%ddn' % i, scale_factor=2)
+        net = Downscale2DLayer(net, name='E%ddn' % i, scale_factor=2)
 
-        lod = Downscale2DLayer(inputs, name='D%dxs' % (i - 1), scale_factor=2 ** (R - i))
-        lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='D%dx' % (i - 1))
-        net = LODSelectLayer(cur_lod, name='D%dlod' % (i - 1), first_incoming_lod=R - i - 1)([net, lod])
+        lod = Downscale2DLayer(input, name='E%dxs' % (i - 1), scale_factor=2 ** (R - i))
+        lod = NINBlock(lod, numf(i - 1), lrelu, relu_init, use_wscale, name='E%dx' % (i - 1))
+        net = LODSelectLayer(cur_lod, name='E%dlod' % (i - 1), first_incoming_lod=R - i - 1)([net, lod])
 
     net = D_ConvBlock(net, numf(1), 3, lrelu, lrelu_init, use_wscale, use_layernorm,
-                      epsilon, use_batchnorm=use_batchnorm, name='D1b')
+                      epsilon, use_batchnorm=use_batchnorm, name='E1b')
     net = D_ConvBlock(net, numf(0), 4, lrelu, lrelu_init, use_wscale, use_layernorm,
-                      epsilon, use_batchnorm=use_batchnorm, name='D1a')
-
-    output_layers = [net]
-
-    encoder = Model(inputs=[inputs], outputs=output_layers)
-    encoder.cur_lod = cur_lod
+                      epsilon, use_batchnorm=use_batchnorm, name='E1a')
 
     # GENERATOR
 
     (act, act_init) = (lrelu, lrelu_init) if use_leakyrelu else (relu, relu_init)
-
-    inputs = [Input(shape=(4, 4, 256), name='Glatents')]
-    net = inputs[-1]
 
     net = G_convblock(net, numf(1), 3, act, act_init, use_wscale=use_wscale,
                       use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G1a')
@@ -200,9 +192,8 @@ def Generator_Encoder(
         net = UpSampling2D(2, name='G%dup' % I)(net)
         # concat U-Net
         encoder_layer = concat_layers[-I+1]
-        print(net, encoder_layer)
 
-        net = concatenate(inputs = [net, encoder_layer], axis=0)
+        net = concatenate(inputs=[net, encoder_layer], axis=0)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
                           use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G%da' % I)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
@@ -217,9 +208,10 @@ def Generator_Encoder(
         if tanh_at_end != 1.0:
             output = Lambda(lambda x: x * tanh_at_end, name='Gtanhs')
 
-    generator = Model(inputs=inputs, outputs=[output])
-    generator.cur_lod = cur_lod
-    return generator, encoder
+    encoder_generator = Model(inputs=input, outputs=[output])
+    encoder_generator.cur_lod = cur_lod
+
+    return encoder_generator
 
 
 def Discriminator(
@@ -269,7 +261,7 @@ def Discriminator(
     return model
 
 
-def replace_batch_norm(model):
+def new_batch_norm(model):
     # source : https://stackoverflow.com/questions/49492255/how-to-replace-or-insert-intermediate-layer-in-keras-model
     # replace all the batch normalization layers in the model with new ones and return the twin model
     # batch norm layers must have 'BN' in their names
@@ -320,6 +312,69 @@ def replace_batch_norm(model):
 
     return twin
 
+
+def replace_batch_norm(model, model_bn, apply='encoder'):
+    # source : https://stackoverflow.com/questions/49492255/how-to-replace-or-insert-intermediate-layer-in-keras-model
+    # replace all the batch normalization layers in the model with new ones and return the twin model
+    # batch norm layers must have 'BN' in their names
+
+    if apply !='encoder' and apply != 'generator':
+        raise ValueError('This functiun must be applied to either encoder or generator ')
+
+    # Auxiliary dictionary to describe the network graph
+    network_dict = {'input_layers_of': {}, 'new_output_tensor_of': {}}
+
+    # Set the input layers of each layer
+    for layer in model.layers:
+        for node in layer.outbound_nodes:
+            layer_name = node.outbound_layer.name
+            if layer_name not in network_dict['input_layers_of']:
+                network_dict['input_layers_of'].update(
+                    {layer_name: [layer.name]})
+            elif layer.name not in network_dict['input_layers_of'][layer_name]:
+                network_dict['input_layers_of'][layer_name].append(layer.name)
+
+    # Set the output tensor of the input layer
+    network_dict['new_output_tensor_of'].update(
+        {model.layers[0].name: model.input})
+
+    # Iterate over all layers after the input
+    for layer in model.layers[1:]:
+
+        # Determine input tensors
+        layer_input = [network_dict['new_output_tensor_of'][layer_aux]
+                       for layer_aux in network_dict['input_layers_of'][layer.name]]
+        if len(layer_input) == 1:
+            layer_input = layer_input[0]
+
+        # replace layer if name matches the regular expression
+        # and it is one to be applied to
+        if ('BN' in layer.name) and ((apply == 'encoder' and layer.name[0] =='E') or (apply == 'generator' and layer.name[0] =='G')):
+
+            # replace layer
+            x = layer_input
+            layer_bn_name = layer.name +'_twin' if not layer.name.endswith('twin') else layer.name[:-5]
+            new_layer = model_bn.get_layer(layer_bn_name)
+            x = new_layer(x)
+
+        else:
+            x = layer(layer_input)
+
+        # Set new output tensor (the original one, or the one of the inserted
+        # layer)
+        network_dict['new_output_tensor_of'].update({layer.name: x})
+
+    twin = Model(inputs=model.inputs, outputs=x)
+
+    return twin
+
+def extract_encoder(model, key ='E1aBN'):
+    try:
+        encoder = Model(inputs=model.input, outputs=model.get_layer(key).output)
+    except ValueError as e:
+        encoder = Model(inputs=model.input, outputs=model.get_layer(key + '_twin').output)
+
+    return encoder
 
 def PG_GAN(G, D, label_size, resolution, num_channels):
     print("Label size:")

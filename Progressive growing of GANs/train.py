@@ -111,6 +111,17 @@ def multiple_loss(y_true, y_pred):
 def mean_loss(y_true, y_pred):
     return K.mean(y_pred)
 
+
+def adversarial_loss(y_true, y_pred):
+    return wasserstein_loss( y_true, y_pred)
+
+def cycle_consistency_loss(y_true, y_pred):
+    return K.sum(K.abs(y_true - y_pred))
+
+def semantic_consistency_loss(y_true, y_pred):
+    return K.sum(K.abs(y_true - y_pred))
+
+
 def load_dataset(dataset_spec=None, verbose=True, **spec_overrides):
     if verbose: print('Loading dataset...')
     if dataset_spec is None: dataset_spec = config.dataset
@@ -166,20 +177,36 @@ def train_gan(
     training_set, drange_orig = load_dataset()
 
 
-    if resume_network:
-        print("Resuming weight from:"+resume_network)
-        G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
-        D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
-        G,D = load_GD_weights(G,D,os.path.join(config.result_dir,resume_network),True)
-    else:
-        G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
-        D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
-        
-    G_train,D_train = PG_GAN(G,D,0,training_set.shape[1],training_set.shape[3])
- 
-    print(G.summary())
-    print(D.summary())
+    # if resume_network:
+    #     print("Resuming weight from:"+resume_network)
+    #     G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
+    #     D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
+    #     G,D = load_GD_weights(G,D,os.path.join(config.result_dir,resume_network),True)
+    # else:
 
+
+    E_G = Encoder_Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
+    D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
+
+    E_twin_G_twin = model.new_batch_norm(E_G)
+    D_twin = model.new_batch_norm(D)
+
+    E = model.extract_encoder(E_G)
+    E_twin = model.extract_encoder(E_twin_G_twin)
+
+
+    E_twin_G = model.replace_batch_norm(E_G, E_twin_G_twin, apply='encoder')
+    E_G_twin = model.replace_batch_norm(E_G, E_twin_G_twin, apply='generator')
+
+    E_G_twin_E_twin = Sequential([E_G_twin, E_twin])
+
+
+    E_G_D = Sequential([E_G, D])
+    E_G_twin_D_twin = Sequential([E_G_twin, D_twin])
+
+    E_twin_G_E = Sequential([E_twin_G, E])
+    E_twin_G_D = Sequential([E_twin_G, D])
+    E_twin_G_twin_D_twin = Sequential([E_twin_G_twin, D_twin])
 
     # Misc init.
     resolution_log2 = int(np.round(np.log2(G.output_shape[2])))
@@ -188,37 +215,57 @@ def train_gan(
     min_lod, max_lod = -1.0, -2.0
     fake_score_avg = 0.0
 
-   
-
-    G_opt = optimizers.Adam(lr = 0.0,beta_1=adam_beta1,beta_2=adam_beta2,epsilon = adam_epsilon)
-    D_opt = optimizers.Adam(lr = 0.0,beta_1 = adam_beta1,beta_2 = adam_beta2,epsilon = adam_epsilon)
+    opt = optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon)
     
     if config.loss['type']=='wass':
-        G_loss = wasserstein_loss
+        E_G_loss = wasserstein_loss
         D_loss = wasserstein_loss
     elif config.loss['type']=='iwass':
-        G_loss = multiple_loss
+        E_G_loss = multiple_loss
         D_loss = [mean_loss,'mse']
         D_loss_weight = [1.0, config.loss['iwass_lambda']]
 
-    G.compile(G_opt,loss=G_loss)
     D.trainable = False
-    G_train.compile(G_opt,loss = G_loss)
-    D.trainable = True
-    D_train.compile(D_opt,loss=D_loss,loss_weights=D_loss_weight)
+    D_twin.trainable = False
+    E_G_D.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+                  loss=adversarial_loss)
+    E_twin_G_D.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+                  loss=adversarial_loss)
 
-    print(D_train.summary())
+    E_G_twin_D_twin.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+                  loss=adversarial_loss)
+    E_twin_G_twin_D_twin.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+                  loss=adversarial_loss)
+
+
+    D.trainable = True
+    D_twin.trainable = True
+    D.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=adversarial_loss)
+    D_twin.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=adversarial_loss)
+
+    E_G.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=cycle_consistency_loss)
+    E_twin_G_twin.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=cycle_consistency_loss)
+
+    E_twin_G_E.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=semantic_consistency_loss)
+    E_G_twin_E_twin.compile(optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon),
+              loss=semantic_consistency_loss)
+
+
     cur_nimg = int(resume_kimg * 1000)
     cur_tick = 0
     tick_start_nimg = cur_nimg
     tick_start_time = time.time()
     tick_train_out = []
-    train_start_time = tick_start_time - resume_time
 
 
     if image_grid_type == 'default':
         if image_grid_size is None:
-            w, h = G.output_shape[1], G.output_shape[2]
+            w, h = E_G.output_shape[1], E_G.output_shape[2]
             print("w:%d,h:%d"%(w,h))
             image_grid_size = np.clip(int(1920 // w), 3, 16).astype('int'), np.clip(1080 / h, 2, 16).astype('int')
         

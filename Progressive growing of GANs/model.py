@@ -132,7 +132,7 @@ def G_convblock(
     return net
 
 
-def Generator_Encoder(
+def Encoder_Generator(
         num_channels=1,
         resolution=32,
         fmap_base=4096,

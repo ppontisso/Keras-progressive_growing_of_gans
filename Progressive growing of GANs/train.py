@@ -140,7 +140,9 @@ def load_dataset(dataset_spec=None, verbose=True, **spec_overrides):
 speed_factor = 20
 
 def train_gan(
-    separate_funcs          = False,
+    images_dir1,
+    images_dir2,
+    batch_size,
     D_training_repeats      = 1,
     G_learning_rate_max     = 0.0010,
     D_learning_rate_max     = 0.0010,
@@ -149,7 +151,6 @@ def train_gan(
     adam_beta2              = 0.99,
     adam_epsilon            = 1e-8,
     minibatch_default       = 16,
-    minibatch_overrides     = {},
     rampup_kimg             = 40/speed_factor,
     rampdown_kimg           = 0,
     lod_initial_resolution  = 4,
@@ -290,7 +291,15 @@ def train_gan(
     misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
     
     nimg_h = 0
-   
+
+    # Set up generators
+
+    data_generator1 = DataGenerator(images_dir=images_dir1)
+    data_generator2 = DataGenerator(images_dir=images_dir2)
+
+    valid = np.ones((batch_size, 1, 1, 1))
+    fake = np.zeros((batch_size, 1, 1, 1))
+
     while cur_nimg < total_kimg * 1000:
         
         # Calculate current LOD.
@@ -304,57 +313,59 @@ def train_gan(
 
         # Look up resolution-dependent parameters.
         cur_res = 2 ** (resolution_log2 - int(np.floor(cur_lod)))
-        minibatch_size = minibatch_overrides.get(cur_res, minibatch_default)
         tick_duration_kimg = tick_kimg_overrides.get(cur_res, tick_kimg_default)
 
+        generator1 = data_generator1.generate(batch_size=batch_size, img_size=cur_res)
+        generator2 = data_generator2.generate(batch_size=batch_size, img_size=cur_res)
 
         # Update network config.
         lrate_coef = rampup(cur_nimg / 1000.0, rampup_kimg)
         lrate_coef *= rampdown_linear(cur_nimg / 1000.0, total_kimg, rampdown_kimg)
 
-        K.set_value(G.optimizer.lr, np.float32(lrate_coef * G_learning_rate_max))
-        K.set_value(G_train.optimizer.lr, np.float32(lrate_coef * G_learning_rate_max))
+        models = [E_G_D, E_twin_G_D, E_G_twin_D_twin, E_twin_G_twin_D_twin, D, D_twin, E_G, E_twin_G_twin,
+                  E_twin_G_E, E_G_twin_E_twin]
 
-        K.set_value(D_train.optimizer.lr, np.float32(lrate_coef * D_learning_rate_max))
-        if hasattr(G_train, 'cur_lod'): K.set_value(G_train.cur_lod,np.float32(cur_lod))
-        if hasattr(D_train, 'cur_lod'): K.set_value(D_train.cur_lod,np.float32(cur_lod))
+        for model in models:
 
+            K.set_value(model.optimizer.lr, np.float32(lrate_coef * learning_rate_max))
+            if hasattr(model, 'cur_lod'): K.set_value(D_train.cur_lod,np.float32(cur_lod))
 
         new_min_lod, new_max_lod = int(np.floor(cur_lod)), int(np.ceil(cur_lod))
         if min_lod != new_min_lod or max_lod != new_max_lod:
             min_lod, max_lod = new_min_lod, new_max_lod
 
-
+        ################################################################################################################
         # train D
-        d_loss = None
-        for idx in range(D_training_repeats):
-            mb_reals, mb_labels = training_set.get_random_minibatch_channel_last(minibatch_size, lod=cur_lod, shrink_based_on_lod=True, labels=True)
-            mb_latents = random_latents(minibatch_size,G.input_shape)
-            mb_labels_rnd = random_labels(minibatch_size,training_set)
-            if min_lod > 0: # compensate for shrink_based_on_lod
-                 mb_reals = np.repeat(mb_reals, 2**min_lod, axis=1)
-                 mb_reals = np.repeat(mb_reals, 2**min_lod, axis=2)
+        #mb_reals, mb_labels = training_set.get_random_minibatch_channel_last(minibatch_size, lod=cur_lod, shrink_based_on_lod=True, labels=True)
 
-            mb_fakes = G.predict_on_batch([mb_latents])
+        images1 = next(generator1)
 
-            epsilon = np.random.uniform(0, 1, size=(minibatch_size,1,1,1))
-            interpolation = epsilon*mb_reals + (1-epsilon)*mb_fakes
-            mb_reals = misc.adjust_dynamic_range(mb_reals, drange_orig, drange_net)
-            d_loss, d_diff, d_norm = D_train.train_on_batch([mb_fakes, mb_reals, interpolation], [np.ones((minibatch_size, 1,1,1)),np.ones((minibatch_size, 1))])
-            d_score_real = D.predict_on_batch(mb_reals)
-            d_score_fake = D.predict_on_batch(mb_fakes)
-            print("real score: %d fake score: %d"%(np.mean(d_score_real),np.mean(d_score_fake)))
-            cur_nimg += minibatch_size
+        # if min_lod > 0: # compensate for shrink_based_on_lod
+        #      mb_reals = np.repeat(mb_reals, 2**min_lod, axis=1)
+        #      mb_reals = np.repeat(mb_reals, 2**min_lod, axis=2)
 
-        #train G
+        img_fakes = E_G.predict_on_batch([images1])
 
-        mb_latents = random_latents(minibatch_size,G.input_shape)
-        mb_labels_rnd = random_labels(minibatch_size,training_set)
+        d_true = D.train_on_batch(images1, valid)
+        d_fake = D.train_on_batch(img_fakes, fake)
+        cur_nimg += batch_size
 
+        #train E_G_D
+        g_loss = E_G_D.train_on_batch(images1, valid)
+        print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
 
-        g_loss = G_train.train_on_batch([mb_latents], (-1)*np.ones((mb_latents.shape[0],1,1,1)))
+        ################################################################################################################
+        # train D_twin
+        images2 = next(generator2)
+        img_fakes = E_twin_G_twin.predict_on_batch([images2])
 
-        print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, d_loss,g_loss))
+        d_true = D_twin.train_on_batch(images1, valid)
+        d_fake = D_twin.train_on_batch(img_fakes, fake)
+
+        #train E_twin_G_twin_D_twin
+        g_loss = E_twin_G_twin_D_twin.train_on_batch(images2, valid)
+        print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
+
 
 
 

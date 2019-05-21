@@ -51,7 +51,7 @@ class DataGenerator:
         self.show_images = show_images
 
 
-        self.filenames = [os.path.join(images_dir, line.strip()) for line in os.listdir(images_dir)]
+        self.filenames = [os.path.join(path, name) for path, subdirs, files in os.walk(images_dir) for name in files]
 
         self.dataset_size = len(self.filenames)
         self.dataset_indices = np.arange(self.dataset_size, dtype=np.int32)

@@ -53,6 +53,24 @@ def create_image_grid(images, grid_size=None):
         grid[y : y + img_h, x : x + img_w,...] = images[idx]
     return grid
 
+def create_image_grid_twin(images1, images2):
+    assert images1.ndim == 3 or images1.ndim == 4
+    assert images1.shape == images2.shape
+    assert images1.dtype == images2.dtype
+
+
+    num, img_w, img_h = images1.shape[0], images1.shape[-2], images1.shape[-3]
+
+    grid = np.zeros( [num*img_w, 2*img_h]+list((images1.shape[-1],)), dtype=images1.dtype)
+
+    for idx in range(num):
+        x = idx * img_w
+        grid[0 : img_h, x : x + img_w,...] = images1[idx]
+        grid[img_h : 2*img_h, x : x + img_w,...] = images2[idx]
+
+    return grid
+
+
 def convert_to_pil_image(image, drange=[0,1]):
     assert image.ndim == 2 or image.ndim == 3
     if image.ndim == 3:
@@ -73,6 +91,10 @@ def save_image(image, filename, drange=[0,1]):
 
 def save_image_grid(images, filename, drange=[0,1], grid_size=None):
     convert_to_pil_image(create_image_grid(images, grid_size), drange).save(filename)
+
+def save_image_grid_twin(images1, images2, filename, drange=[0,1]):
+    convert_to_pil_image(create_image_grid_twin(images1, images2), drange).save(filename)
+
 
 #----------------------------------------------------------------------------
 # Training utils.

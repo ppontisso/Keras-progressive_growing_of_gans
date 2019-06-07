@@ -3,6 +3,7 @@ import sys
 import time
 import glob
 from model import *
+from data_generator import *
 from config import *
 from keras.models import load_model,save_model
 from keras.layers import Input
@@ -189,15 +190,15 @@ def train_gan(
     E_G = Encoder_Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
     D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
 
-    E_twin_G_twin = model.new_batch_norm(E_G)
-    D_twin = model.new_batch_norm(D)
+    E_twin_G_twin = new_batch_norm(E_G)
+    D_twin = new_batch_norm(D)
 
-    E = model.extract_encoder(E_G)
-    E_twin = model.extract_encoder(E_twin_G_twin)
+    E = extract_encoder(E_G)
+    E_twin = extract_encoder(E_twin_G_twin)
 
 
-    E_twin_G = model.replace_batch_norm(E_G, E_twin_G_twin, apply='encoder')
-    E_G_twin = model.replace_batch_norm(E_G, E_twin_G_twin, apply='generator')
+    E_twin_G = replace_batch_norm(E_G, E_twin_G_twin, apply='encoder')
+    E_G_twin = replace_batch_norm(E_G, E_twin_G_twin, apply='generator')
 
     E_G_twin_E_twin = Sequential([E_G_twin, E_twin])
 
@@ -210,21 +211,11 @@ def train_gan(
     E_twin_G_twin_D_twin = Sequential([E_twin_G_twin, D_twin])
 
     # Misc init.
-    resolution_log2 = int(np.round(np.log2(G.output_shape[2])))
+    resolution_log2 = int(np.round(np.log2(E_G.output_shape[2])))
     initial_lod = max(resolution_log2 - int(np.round(np.log2(lod_initial_resolution))), 0)
     cur_lod = 0.0
     min_lod, max_lod = -1.0, -2.0
     fake_score_avg = 0.0
-
-    opt = optimizers.Adam(lr=0.0, beta_1=adam_beta1, beta_2=adam_beta2, epsilon=adam_epsilon)
-    
-    if config.loss['type']=='wass':
-        E_G_loss = wasserstein_loss
-        D_loss = wasserstein_loss
-    elif config.loss['type']=='iwass':
-        E_G_loss = multiple_loss
-        D_loss = [mean_loss,'mse']
-        D_loss_weight = [1.0, config.loss['iwass_lambda']]
 
     D.trainable = False
     D_twin.trainable = False
@@ -263,39 +254,34 @@ def train_gan(
     tick_start_time = time.time()
     tick_train_out = []
 
-
-    if image_grid_type == 'default':
-        if image_grid_size is None:
-            w, h = E_G.output_shape[1], E_G.output_shape[2]
-            print("w:%d,h:%d"%(w,h))
-            image_grid_size = np.clip(int(1920 // w), 3, 16).astype('int'), np.clip(1080 / h, 2, 16).astype('int')
-        
-        print("image_grid_size:",image_grid_size)
-
-        example_real_images, snapshot_fake_labels = training_set.get_random_minibatch_channel_last(np.prod(image_grid_size), labels=True)
-        snapshot_fake_latents = random_latents(np.prod(image_grid_size), G.input_shape)
-    else:
-        raise ValueError('Invalid image_grid_type', image_grid_type)
-
-
-    result_subdir = misc.create_result_subdir(config.result_dir, config.run_desc)
-
-
-
-    print("example_real_images.shape:",example_real_images.shape)
-    misc.save_image_grid(example_real_images, os.path.join(result_subdir, 'reals.png'), drange=drange_orig, grid_size=image_grid_size)
-
-
-    snapshot_fake_latents = random_latents(np.prod(image_grid_size), G.input_shape)
-    snapshot_fake_images = G.predict_on_batch(snapshot_fake_latents)
-    misc.save_image_grid(snapshot_fake_images, os.path.join(result_subdir, 'fakes%06d.png' % (cur_nimg / 1000)), drange=drange_viz, grid_size=image_grid_size)
-    
-    nimg_h = 0
-
     # Set up generators
 
     data_generator1 = DataGenerator(images_dir=images_dir1)
     data_generator2 = DataGenerator(images_dir=images_dir2)
+
+    generator1 = data_generator1.generate(batch_size=2, img_size=2**resolution_log2)
+    generator2 = data_generator2.generate(batch_size=2, img_size=2**resolution_log2)
+
+    real_1 = next(generator1)
+    real_2 = next(generator2)
+
+    result_subdir = misc.create_result_subdir(config.result_dir, config.run_desc)
+
+    print("real_1.shape:", real_1.shape)
+    print("real_2.shape:", real_2.shape)
+
+    misc.save_image_grid_twin(real_1, real_2, os.path.join(result_subdir, 'reals.png'),
+                              drange=drange_orig)
+
+    fake_2 = E_G_twin.predict_on_batch(real_1)
+    fake_1 = E_twin_G.predict_on_batch(real_2)
+
+    misc.save_image_grid(real_1, fake_2, os.path.join(result_subdir, 'fakes_dog%06d.png' % (cur_nimg / 1000)),
+                         drange=drange_viz)
+    misc.save_image_grid(real_2, fake_1, os.path.join(result_subdir, 'fakes_celeb%06d.png' % (cur_nimg / 1000)),
+                         drange=drange_viz)
+    1/0
+    nimg_h = 0
 
     valid = np.ones((batch_size, 1, 1, 1))
     fake = np.zeros((batch_size, 1, 1, 1))

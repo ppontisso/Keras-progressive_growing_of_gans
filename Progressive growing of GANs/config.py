@@ -6,7 +6,9 @@ dataset = None
 
 train = dict(                               # Training parameters:
     func                    = 'train_gan',  # Main training func.
-    separate_funcs          = True,         # Alternate between training generator and discriminator?
+    images_dir1 = 'datasets/CelebA',
+    images_dir2 = 'datasets/dogs',
+    batch_size = 2,
     D_training_repeats      = 1,            # n_{critic}
     G_learning_rate_max     = 0.001,        # \alpha
     D_learning_rate_max     = 0.001,        # \alpha
@@ -15,7 +17,6 @@ train = dict(                               # Training parameters:
     adam_beta2              = 0.99,         # \beta_2
     adam_epsilon            = 1e-8,         # \epsilon
     minibatch_default       = 16,           # Minibatch size for low resolutions.
-    minibatch_overrides     = {256:14, 512:6,  1024:3}, # Minibatch sizes for high resolutions.
     rampup_kimg             = 40,           # Learning rate rampup.
     rampdown_kimg           = 0,            # Learning rate rampdown.
     lod_initial_resolution  = 4,            # Network resolution at the beginning.
@@ -64,6 +65,6 @@ if 1:
 
     dataset = dict(h5_path='celeba-128x128.h5', resolution=32, max_labels=0, mirror_augment=True)
 
-    train.update(lod_training_kimg=800, lod_transition_kimg=800, rampup_kimg=0, total_kimg=10000, minibatch_overrides={})
+    train.update(lod_training_kimg=800, lod_transition_kimg=800, rampup_kimg=0, total_kimg=10000)
     G.update(fmap_base=2048)
     D.update(fmap_base=2048)

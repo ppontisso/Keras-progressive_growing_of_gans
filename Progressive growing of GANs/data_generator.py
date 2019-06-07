@@ -163,9 +163,11 @@ class DataGenerator:
             #########################################################################################
 
             for i in range(len(batch_X)):
+                print(img_size)
+                print(batch_X[i].shape)
                 batch_X[i] = cv2.resize(batch_X[i],
-                                   dsize=(img_size, img_size),
-                                   interpolation=cv2.INTER_LINEAR)
+                                        dsize=(img_size, img_size),
+                                        interpolation = cv2.INTER_LINEAR)
 
                 ########################################################################################
                 # visualize the batch items if needed

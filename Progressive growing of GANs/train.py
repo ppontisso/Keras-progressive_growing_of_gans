@@ -178,7 +178,6 @@ def train_gan(
 
     training_set, drange_orig = load_dataset()
 
-
     # if resume_network:
     #     print("Resuming weight from:"+resume_network)
     #     G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
@@ -187,8 +186,8 @@ def train_gan(
     # else:
 
 
-    E_G = Encoder_Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
-    D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.D)
+    E_G = Encoder_Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], **config.G)
+    D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], **config.D)
 
     E_twin_G_twin = new_batch_norm(E_G)
     D_twin = new_batch_norm(D)
@@ -270,17 +269,8 @@ def train_gan(
     print("real_1.shape:", real_1.shape)
     print("real_2.shape:", real_2.shape)
 
-    misc.save_image_grid_twin(real_1, real_2, os.path.join(result_subdir, 'reals.png'),
-                              drange=drange_orig)
+    misc.save_image_grid_twin(real_1, real_2, os.path.join(result_subdir, 'reals.png'))
 
-    fake_2 = E_G_twin.predict_on_batch(real_1)
-    fake_1 = E_twin_G.predict_on_batch(real_2)
-
-    misc.save_image_grid(real_1, fake_2, os.path.join(result_subdir, 'fakes_dog%06d.png' % (cur_nimg / 1000)),
-                         drange=drange_viz)
-    misc.save_image_grid(real_2, fake_1, os.path.join(result_subdir, 'fakes_celeb%06d.png' % (cur_nimg / 1000)),
-                         drange=drange_viz)
-    1/0
     nimg_h = 0
 
     valid = np.ones((batch_size, 1, 1, 1))
@@ -311,14 +301,26 @@ def train_gan(
         models = [E_G_D, E_twin_G_D, E_G_twin_D_twin, E_twin_G_twin_D_twin, D, D_twin, E_G, E_twin_G_twin,
                   E_twin_G_E, E_G_twin_E_twin]
 
+        learning_rate_max = 0.001
+
         for model in models:
 
             K.set_value(model.optimizer.lr, np.float32(lrate_coef * learning_rate_max))
-            if hasattr(model, 'cur_lod'): K.set_value(D_train.cur_lod,np.float32(cur_lod))
+            if hasattr(model, 'cur_lod'): K.set_value(model.cur_lod,np.float32(cur_lod))
 
         new_min_lod, new_max_lod = int(np.floor(cur_lod)), int(np.ceil(cur_lod))
         if min_lod != new_min_lod or max_lod != new_max_lod:
             min_lod, max_lod = new_min_lod, new_max_lod
+
+        fake_2 = E_G_twin.predict_on_batch(real_1)
+        fake_1 = E_twin_G.predict_on_batch(real_2)
+        misc.save_image_grid_twin(real_1, fake_2, os.path.join(result_subdir, 'fakes_dog%06d.png' % (cur_nimg / 1000)))
+        misc.save_image_grid_twin(real_2, fake_1, os.path.join(result_subdir, 'fakes_celeb%06d.png' % (cur_nimg / 1000)))
+
+        1 / 0
+
+
+
 
         ################################################################################################################
         # train D

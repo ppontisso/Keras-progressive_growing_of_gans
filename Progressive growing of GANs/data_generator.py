@@ -152,19 +152,17 @@ class DataGenerator:
                 batch_filenames = self.filenames[current:current + batch_size]
                 for filename in batch_filenames:
                     with Image.open(filename) as image:
-                        batch_X.append(np.array(image, dtype=np.uint8))
+                        batch_X.append(np.array(image, dtype=np.float32))
 
             current += batch_size
 
 
-
-            #########################################################################################
-            # Resize images to the desired shape
-            #########################################################################################
-
             for i in range(len(batch_X)):
-                print(img_size)
-                print(batch_X[i].shape)
+
+                #########################################################################################
+                # Resize images to the desired shape
+                #########################################################################################
+
                 batch_X[i] = cv2.resize(batch_X[i],
                                         dsize=(img_size, img_size),
                                         interpolation = cv2.INTER_LINEAR)
@@ -176,6 +174,16 @@ class DataGenerator:
                 if self.show_images:
                     plt.figure(figsize=(12, 12))
                     plt.imshow(batch_X[i])
+
+                ########################################################################################
+                # rescale image between 0 and 1
+                ########################################################################################
+
+                batch_X[i] -= np.min(batch_X[i])
+                m = np.max(batch_X[i])
+                if m != 0:
+                    batch_X[i] /= m
+
 
             batch_X = np.array(batch_X)
 

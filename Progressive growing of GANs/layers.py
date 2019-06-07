@@ -65,7 +65,7 @@ class LODSelectLayer(Layer):
         t = self.cur_lod - self.first_incoming_lod
         r = v[hi]
         for i in range(hi-1, lo-1, -1): # i = hi-1, hi-2, ..., lo
-            r = K.switch(K.less(t, i+1), v[i] * ((i+1)-t) + v[i+1] * (t-i), r)
+            r = K.switch(K.less(t, i+1), v[i] * ((i+1)-t) + v[i+1] * (t-i), r) #here problem
         if lo < hi:
             r = K.switch(K.less_equal(t, lo), v[lo], r)
         return r

@@ -193,7 +193,7 @@ def Encoder_Generator(
         # concat U-Net
         encoder_layer = concat_layers[-I+1]
 
-        net = concatenate(inputs=[net, encoder_layer], axis=0)
+        net = concatenate(inputs=[net, encoder_layer], axis=-1)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
                           use_batchnorm=use_batchnorm, use_pixelnorm=use_pixelnorm, name='G%da' % I)
         net = G_convblock(net, numf(I), 3, act, act_init, use_wscale=use_wscale,
@@ -203,6 +203,7 @@ def Encoder_Generator(
     lods = [NINBlock(l, num_channels, linear, linear_init, use_wscale=use_wscale,
                      name='Glod%d' % i) for i, l in enumerate(reversed(lods))]
     output = LODSelectLayer(cur_lod, name='Glod')(lods)
+
     if tanh_at_end is not None:
         output = Activation('tanh', name='Gtanh')(output)
         if tanh_at_end != 1.0:

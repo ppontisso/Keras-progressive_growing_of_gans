@@ -58,7 +58,6 @@ def create_image_grid_twin(images1, images2):
     assert images1.shape == images2.shape
     assert images1.dtype == images2.dtype
 
-
     num, img_w, img_h = images1.shape[0], images1.shape[-2], images1.shape[-3]
 
     grid = np.zeros( [num*img_w, 2*img_h]+list((images1.shape[-1],)), dtype=images1.dtype)

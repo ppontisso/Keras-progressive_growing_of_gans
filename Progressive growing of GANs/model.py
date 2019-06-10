@@ -272,7 +272,7 @@ def new_batch_norm(model):
 
     # Set the input layers of each layer
     for layer in model.layers:
-        for node in layer.outbound_nodes:
+        for node in layer._outbound_nodes:
             layer_name = node.outbound_layer.name
             if layer_name not in network_dict['input_layers_of']:
                 network_dict['input_layers_of'].update(
@@ -327,7 +327,7 @@ def replace_batch_norm(model, model_bn, apply='encoder'):
 
     # Set the input layers of each layer
     for layer in model.layers:
-        for node in layer.outbound_nodes:
+        for node in layer._outbound_nodes:
             layer_name = node.outbound_layer.name
             if layer_name not in network_dict['input_layers_of']:
                 network_dict['input_layers_of'].update(

@@ -144,6 +144,7 @@ def train_gan(
     images_dir1,
     images_dir2,
     batch_size,
+    img_shape               = (32,32,3),
     D_training_repeats      = 1,
     G_learning_rate_max     = 0.0010,
     D_learning_rate_max     = 0.0010,
@@ -176,8 +177,6 @@ def train_gan(
     resume_kimg             = 0.0,
     resume_time             = 0.0):
 
-    training_set, drange_orig = load_dataset()
-
     # if resume_network:
     #     print("Resuming weight from:"+resume_network)
     #     G = Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], label_size=training_set.labels.shape[1], **config.G)
@@ -186,8 +185,8 @@ def train_gan(
     # else:
 
 
-    E_G = Encoder_Generator(num_channels=training_set.shape[3], resolution=training_set.shape[1], **config.G)
-    D = Discriminator(num_channels=training_set.shape[3], resolution=training_set.shape[1], **config.D)
+    E_G = Encoder_Generator(num_channels=img_shape[2], resolution=img_shape[0], **config.G)
+    D = Discriminator(num_channels=img_shape[2], resolution=img_shape[0], **config.D)
 
     E_twin_G_twin = new_batch_norm(E_G)
     D_twin = new_batch_norm(D)
@@ -291,8 +290,6 @@ def train_gan(
         cur_res = 2 ** (resolution_log2 - int(np.floor(cur_lod)))
         tick_duration_kimg = tick_kimg_overrides.get(cur_res, tick_kimg_default)
 
-        generator1 = data_generator1.generate(batch_size=batch_size, img_size=cur_res)
-        generator2 = data_generator2.generate(batch_size=batch_size, img_size=cur_res)
 
         # Update network config.
         lrate_coef = rampup(cur_nimg / 1000.0, rampup_kimg)
@@ -312,50 +309,77 @@ def train_gan(
         if min_lod != new_min_lod or max_lod != new_max_lod:
             min_lod, max_lod = new_min_lod, new_max_lod
 
+        generator1 = data_generator1.generate(batch_size=batch_size, img_size=cur_res, min_lod=min_lod)
+        generator2 = data_generator2.generate(batch_size=batch_size, img_size=cur_res, min_lod=min_lod)
+
+        # create image to check the training process
+        real_1 = next(generator1)
+        real_2 = next(generator2)
+
         fake_2 = E_G_twin.predict_on_batch(real_1)
         fake_1 = E_twin_G.predict_on_batch(real_2)
+        
         misc.save_image_grid_twin(real_1, fake_2, os.path.join(result_subdir, 'fakes_dog%06d.png' % (cur_nimg / 1000)))
         misc.save_image_grid_twin(real_2, fake_1, os.path.join(result_subdir, 'fakes_celeb%06d.png' % (cur_nimg / 1000)))
 
-        1 / 0
-
-
-
-
+        cur_nimg += batch_size
         ################################################################################################################
         # train D
-        #mb_reals, mb_labels = training_set.get_random_minibatch_channel_last(minibatch_size, lod=cur_lod, shrink_based_on_lod=True, labels=True)
 
         images1 = next(generator1)
-
-        # if min_lod > 0: # compensate for shrink_based_on_lod
-        #      mb_reals = np.repeat(mb_reals, 2**min_lod, axis=1)
-        #      mb_reals = np.repeat(mb_reals, 2**min_lod, axis=2)
-
         img_fakes = E_G.predict_on_batch([images1])
 
         d_true = D.train_on_batch(images1, valid)
         d_fake = D.train_on_batch(img_fakes, fake)
-        cur_nimg += batch_size
 
         #train E_G_D
         g_loss = E_G_D.train_on_batch(images1, valid)
-        print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
+        #print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
 
         ################################################################################################################
         # train D_twin
         images2 = next(generator2)
         img_fakes = E_twin_G_twin.predict_on_batch([images2])
 
-        d_true = D_twin.train_on_batch(images1, valid)
+        d_true = D_twin.train_on_batch(images2, valid)
         d_fake = D_twin.train_on_batch(img_fakes, fake)
 
         #train E_twin_G_twin_D_twin
         g_loss = E_twin_G_twin_D_twin.train_on_batch(images2, valid)
-        print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
+        #print ("%d [D loss: %f] [G loss: %f]" % (cur_nimg, np.mean(d_true, d_fake), g_loss))
+
+        #train EG on cycle consistency
+        E_G.train_on_batch(images1, images1)
+
+        # train E_twin_G_twin on cycle consistency
+        E_twin_G_twin.train_on_batch(images2, images2)
+
+        # train E_G_twin an D_twin on discriminator loss
+        img_fakes = E_G_twin.predict_on_batch([images1])
+
+        d_true = D_twin.train_on_batch(images2, valid)
+        d_fake = D_twin.train_on_batch(img_fakes, fake)
+        g_loss = E_G_twin_D_twin.train_on_batch(images1, valid)
+
+        # train E_twin_G and D on discriminator loss
+        img_fakes = E_twin_G.predict_on_batch([images2])
+
+        d_true = D.train_on_batch(images1, valid)
+        d_fake = D.train_on_batch(img_fakes, fake)
+        g_loss = E_twin_G_D.train_on_batch(images2, valid)
+
+        # train E_G_twin on semantic consistency
+
+        semantic = E.predict_on_batch(images1)
+        E_G_twin_E_twin.train_on_batch(images1, semantic)
+
+        # train E_twin_G on semantic consistency
+
+        semantic = E_twin.predict_on_batch(images2)
+        E_twin_G_E.train_on_batch(images2, semantic)
 
 
-
+        1/0
 
         fake_score_cur = np.clip(np.mean(d_loss), 0.0, 1.0)
         fake_score_avg = fake_score_avg * gdrop_beta + fake_score_cur * (1.0 - gdrop_beta)

@@ -69,7 +69,8 @@ class DataGenerator:
     def generate(self,
                  batch_size=32,
                  img_size = 32,
-                 shuffle=True):
+                 shuffle=True,
+                 min_lod=0):
         '''
         Generates batches of samples
 
@@ -166,6 +167,10 @@ class DataGenerator:
                 batch_X[i] = cv2.resize(batch_X[i],
                                         dsize=(img_size, img_size),
                                         interpolation = cv2.INTER_LINEAR)
+
+                if min_lod > 0:  # compensate for shrink_based_on_lod
+                    batch_X[i] = np.repeat(batch_X[i], 2 ** min_lod, axis=0)
+                    batch_X[i] = np.repeat(batch_X[i], 2 ** min_lod, axis=1)
 
                 ########################################################################################
                 # visualize the batch items if needed
